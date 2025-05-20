@@ -1,13 +1,17 @@
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
 from typing_extensions import TypedDict
 from typing import Literal
+from Templates import MODE_SELECTION_PROMPT
 
-LessonsTypes = Literal['new_words', 'training', 'test']
+LessonsTypes = Literal['learn', 'train', 'test']
 
 
 class LessonState(TypedDict):
+    user_message: str
     current_word: str
-    working_mode: LessonsTypes
+    working_mode: str
     words: list
     learning_progress: float
     words_amount: int
@@ -15,11 +19,17 @@ class LessonState(TypedDict):
 
 
 class Agent:
+
     def __init__(self, model):
         self.model = model
 
-    def get_working_mode(self, state:LessonState) -> LessonState:
-        pass
+    async def get_working_mode(self, state: LessonState) -> LessonState:
+        prompt_for_valid_data = ChatPromptTemplate(
+            [("system", MODE_SELECTION_PROMPT), ("human", "{user_message}")]
+        )
+        answer_chain = prompt_for_valid_data | self.model.model | StrOutputParser()
+        state['working_mode'] = await answer_chain.ainvoke({"user_message": state["user_message"]})
+        return state
 
     def add_words_to_vocab(self, state: LessonState) -> LessonState:
         pass
