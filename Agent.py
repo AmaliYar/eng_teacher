@@ -4,6 +4,7 @@ from langgraph.graph import StateGraph, END
 from typing_extensions import TypedDict
 from typing import Literal
 from Templates import MODE_SELECTION_PROMPT
+from Dbase import Postgres
 
 LessonsTypes = Literal['learn', 'train', 'test']
 
@@ -16,12 +17,14 @@ class LessonState(TypedDict):
     learning_progress: float
     words_amount: int
     successful_learning: bool
+    current_word_translations: dict
 
 
 class Agent:
 
-    def __init__(self, model):
+    def __init__(self, model, db: Postgres):
         self.model = model
+        self.db = db
 
     async def get_working_mode(self, state: LessonState) -> LessonState:
         prompt_for_valid_data = ChatPromptTemplate(
@@ -32,7 +35,16 @@ class Agent:
         return state
 
     def add_words_to_vocab(self, state: LessonState) -> LessonState:
-        pass
+        QUERY_ADD_NEW_WORD = f"""
+        -- INSERT INTO words (word, as_noun, learning_progress, as_verb, as_adjective)
+        -- VALUES ( {state['current_word']},
+                    ARRAY({state['current_word_translations']['noun']}),
+                     '0.0',
+                    ARRAY({state['current_word_translations']['verb']}),
+                    ARRAY({state['current_word_translations']['adjective']}));
+        """
+        self.db.send_query(QUERY_ADD_NEW_WORD)
+        return state
 
     def get_words_from_vocab(self, state: LessonState) -> LessonState:
         pass
