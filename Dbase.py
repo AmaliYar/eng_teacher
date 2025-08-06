@@ -12,7 +12,7 @@ DEFAULT_POSTGRES_CONNECTION_CONFIG = {
 
 class Database(ABC):
 
-    def send_query(self, query):
+    def send_query(self, query, params):
         pass
 
     def end_session(self):
@@ -37,9 +37,9 @@ class Postgres(Database):
         except pg8000.Error as err:
             print(f"An error occurred: {err}")
 
-    def send_query(self, query: str) -> tuple:
+    def send_query(self, query: str, params) -> tuple:
         try:
-            return self.cursor.execute(query).fetchall()
+            return self.cursor.execute(query, params).fetchall()
         except pg8000.Error as err:
             print(f"An error occurred: {err}")
             return tuple()

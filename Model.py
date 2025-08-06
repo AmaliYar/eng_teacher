@@ -16,7 +16,7 @@ class LangModel:
 
     def __init__(self):
         self.api_key = getpass.getpass("Api key:")
-        self.model = ChatMistralAI(api_key=self.api_key)
+        self.model = ChatMistralAI(model="mistral-large-latest", api_key=self.api_key)
         self.model_instance = 'mistral-embed'
         # self.embedder = Mistral(api_key=self.api_key)
         self.embedder = MistralAIEmbeddings(api_key=self.api_key)

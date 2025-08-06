@@ -1,9 +1,14 @@
 from asyncio import run
 from Model import LangModel
-from Agent import LessonState, Agent
+from Agent import LessonState, Agent, Graph
+from Dbase import Postgres
 llm = LangModel()
-state = LessonState()
-agent = Agent(llm)
-state["user_message"] = "Hi ! I want to refresh my knowledge in some words"
-res = run(agent.get_working_mode(state))
-print(res)
+base = Postgres
+state = LessonState(is_word_exist=False)
+agent = Agent(llm, base())
+
+state["user_message"] = 'Hi!, I want to learn a new word! My word: satisfaction'
+graph = Graph()
+graph.build_default_graph(agent)
+pipeline = graph.gph.compile()
+pipeline.invoke(state)
