@@ -1,16 +1,15 @@
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, END, START
 from typing_extensions import TypedDict, Annotated
-from typing import Literal
-from Templates import MODE_SELECTION_PROMPT
+from typing import Literal, Optional, Final
+from langchain_core.tools import tool
 from Dbase import Postgres
-from langgraph.prebuilt import create_react_agent
+from langgraph.prebuilt import create_react_agent, tools_condition, ToolNode
 from langchain_mistralai.chat_models import ChatMistralAI
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import Field, BaseModel
-from typing import Optional
+from langgraph.types import interrupt
 
 LessonsTypes = Literal['learn', 'train', 'test']
 DIALOG_STEPS = 3
@@ -29,6 +28,8 @@ class LessonState(TypedDict):
     successful_learning: bool
     current_word_translations: dict
     is_word_exist: bool
+    messages: list
+    message: str
 
 
 class Agent:
@@ -83,7 +84,8 @@ class Agent:
         return state
 
     def start_training(self, state: LessonState) -> LessonState:
-        #todo: проверить работоспособность
+        #todo: add conditional handling of input data: can be one word, or more than one
+
         agent = self.get_dialog_agent(state['current_word'])
         print('welcome the agent. He knows your word yet')
         while not self.check_finalizer_in_the_last_message(LEARNING_STOP_WORD,
@@ -96,10 +98,6 @@ class Agent:
         return state
 
     def get_dialog_agent(self, current_word: str):
-        class LearningState(BaseModel):
-            """ Learning of the word progress"""
-            is_learned: Literal[True, False] = Field(default=None,
-                                                     description=f'describes learning by user a word: {current_word}')
         return create_react_agent(model=ChatMistralAI(
             api_key=self.model.api_key, model='mistral-medium-latest', temperature=0.8),
                                   tools=[],
@@ -144,7 +142,6 @@ class Agent:
                 User's word today: {current_word}
                 """)
 
-    #
     def start_learning_new_words(self, state: LessonState) -> LessonState:
         #todo: add validation word in database
         state = self.get_words_from_vocab(state)
@@ -188,8 +185,22 @@ class Agent:
         self.start_training(state)
         return state
 
-    def start_test(self, state: LessonState) -> LessonState:
-        pass
+    def start_test(self, state: LessonState):
+        class UserWords(BaseModel):
+            """words amount, which user wants to learn"""
+            words: Optional[int] = Field(default=None, description="words amount, which user wants to learn")
+
+        response = self.model.model.with_structured_output(UserWords).invoke(
+            [SystemMessage(
+                content="""
+                You are language learning assistant.
+                Your main task - calculate, how many words user wants today to train.
+                Sometimes, user can forget to specify words amount. Then, you must request this information.
+                Request words until user provides you this information, because it is very important!
+                """),
+             HumanMessage(content=state['user_message'])])
+        state['words_amount'] = response.words
+        return state
 
     def decide_to_finish_lesson(self, state: LessonState) -> LessonState:
         pass
@@ -211,6 +222,11 @@ class Agent:
             return 'finish'
         return state['working_mode']
 
+    def check_info_fullfillment(self, state: LessonState):
+        if state['words_amount']:
+            return 'next'
+        return 'get_info'
+
     def check_finalizer_in_the_last_message(self, content, messages_holder, params: dict, state):
         if messages_holder.checkpointer.get(params):
             if content in messages_holder.checkpointer.get(params)['channel_values']['messages'][-1].content:
@@ -218,6 +234,16 @@ class Agent:
                 return True
         return False
 
+    def chatbot(self, state):
+        message = self.model.model.invoke(state["messages"][-1].content)
+        assert len(message.tool_calls) <= 1
+        return {"messages": [message]}
+
+    def request_info(self, state: LessonState):
+        """Request information from user about words amount which user wants to learn"""
+        # response = interrupt('Give me amount of words!!!')
+        state['words_amount'] = int(input('How many words...'))
+        return state
 
 
 class Graph:
@@ -225,24 +251,34 @@ class Graph:
         self.gph = StateGraph(states)
 
     def build_default_graph(self, agent: Agent):
+        # tools = []
+        # tools = [request_info]
+        # tool_node = ToolNode(tools=tools)
         self.gph.add_node("welcome_page", agent.get_working_mode)
+        # self.gph.add_node("tools", tool_node)
         self.gph.add_node("training", agent.start_training)
         self.gph.add_node("learning", agent.start_learning_new_words)
         self.gph.add_node("testing", agent.start_test)
+        self.gph.add_node("ask_info", agent.request_info)
         self.gph.add_node("check_progress", agent.decide_to_finish_lesson)
         self.gph.add_conditional_edges("welcome_page", agent.return_working_mode,
                                        {'new': "learning",
                                         'training': "training",
                                         'test': "testing"})
+        self.gph.add_conditional_edges("testing", agent.check_info_fullfillment,
+                                       {'get_info': 'ask_info',
+                                        'next': 'testing'})
         self.gph.add_edge("training", "check_progress")
         self.gph.add_edge("learning", "check_progress")
         self.gph.add_edge("testing", "check_progress")
+        # self.gph.add_edge("tools", "testing")
         self.gph.add_conditional_edges("check_progress", agent.check_lesson_completeness,
                                        {'new': "learning",
                                         'training': "training",
                                         'test': "testing",
                                         'finish': END})
         self.gph.set_entry_point("welcome_page")
+
 
 
 # while True:
