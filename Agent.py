@@ -9,7 +9,7 @@ from langchain_mistralai.chat_models import ChatMistralAI
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import Field, BaseModel
-from langgraph.types import interrupt
+from langgraph.types import interrupt, Command
 
 LessonsTypes = Literal['learn', 'train', 'test']
 DIALOG_STEPS = 3
@@ -46,6 +46,7 @@ class Agent:
             word: Optional[str] = Field(
                 default='',
                 description="Word, which user wants to study")
+
         prompt = PromptTemplate.from_template("""You are language assistant. You have 2 main task: 
                         1) detect working mode, which has supposed by user question
                         2) if user pointed a word, which he want to study, find it and remember
@@ -69,22 +70,30 @@ class Agent:
                             ))
         return state
 
-    def get_words_from_vocab(self, state: LessonState) -> LessonState:
-        QUERY_FIND_WORDS = "SELECT * FROM words WHERE word=%s"
-        query_result = self.db.send_query(QUERY_FIND_WORDS, (state['current_word'],))
+    def get_word_from_vocab(self, state: LessonState) -> LessonState:
+        QUERY_FIND_WORD = "SELECT * FROM words WHERE word=%s"
+        query_result = self.db.send_query(QUERY_FIND_WORD, (state['current_word'],))
         if query_result:
             state['learning_progress'] = query_result[0][2]
             state['is_word_exist'] = True
         return state
 
-    def update_progress(self, state:LessonState) -> LessonState:
+    def get_words_from_vocab(self, state: LessonState) -> list:
+        QUERY_FIND_WORDS = "SELECT word FROM words ORDER BY learning_progress LIMIT %s"
+        query_result = self.db.send_query(QUERY_FIND_WORDS, (state['words_amount'],))
+        formatted_result = sum(query_result, [])
+        return formatted_result
+
+
+
+    def update_progress(self, state: LessonState) -> LessonState:
         state['learning_progress'] += LEARNING_RATE
         QUERY_UPDATE_PROGRESS = "UPDATE words SET learning_progress =%s WHERE word =%s"
         self.db.send_query(QUERY_UPDATE_PROGRESS, (state['learning_progress'], state['current_word']))
         return state
 
     def start_training(self, state: LessonState) -> LessonState:
-        #todo: add conditional handling of input data: can be one word, or more than one
+        # todo: add conditional handling of input data: can be one word, or more than one
 
         agent = self.get_dialog_agent(state['current_word'])
         print('welcome the agent. He knows your word yet')
@@ -100,10 +109,10 @@ class Agent:
     def get_dialog_agent(self, current_word: str):
         return create_react_agent(model=ChatMistralAI(
             api_key=self.model.api_key, model='mistral-medium-latest', temperature=0.8),
-                                  tools=[],
-                                  # response_format=LearningState,
-                                  checkpointer=MemorySaver(), prompt=
-                                  f"""
+            tools=[],
+            # response_format=LearningState,
+            checkpointer=MemorySaver(), prompt=
+            f"""
                 <instruction>
                 You are system, which helps peoples to learn new words. 
                 Before sending messages for user, think about your interaction plan with user, 
@@ -143,14 +152,14 @@ class Agent:
                 """)
 
     def start_learning_new_words(self, state: LessonState) -> LessonState:
-        #todo: add validation word in database
-        state = self.get_words_from_vocab(state)
+        # todo: add validation word in database
+        state = self.get_word_from_vocab(state)
         if not state['is_word_exist']:
             print(f'It is a new word, forming metadata in database')
             structured_input = self.model.model.with_structured_output(method="json_mode")
             model_response = structured_input.invoke([
-                        SystemMessage(
-                            content="""
+                SystemMessage(
+                    content="""
                             <instruction>
                             You are system for preparing data to loading into database. Your working algorithm:
                             1) detect in user message word, which he wants to learn. Remember this word like <current_word>
@@ -177,9 +186,9 @@ class Agent:
                             </output format>
                             """
 
-                        ),
+                ),
                 HumanMessage(content=state["current_word"])
-                    ])
+            ])
             state.update(model_response)
             self.add_words_to_vocab(state)
         self.start_training(state)
@@ -198,9 +207,17 @@ class Agent:
                 Sometimes, user can forget to specify words amount. Then, you must request this information.
                 Request words until user provides you this information, because it is very important!
                 """),
-             HumanMessage(content=state['user_message'])])
+                HumanMessage(content=state['user_message'])])
+        if not response.words:
+            response.words = int(input('Give me amount of words!!!'))
+            print(f'requesting words amount from user')
+            # todo: fix interrupt bug - doesn't work
+            # response.words = interrupt()
         state['words_amount'] = response.words
-        return state
+        state['words'] = self.get_words_from_vocab(state)
+        print(f'detected {response.words} words')
+        #todo: add testing pipeline: ask trasnlation for every word (without llm)
+        return Command(goto="check_progress")
 
     def decide_to_finish_lesson(self, state: LessonState) -> LessonState:
         pass
@@ -210,7 +227,7 @@ class Agent:
 
     def check_lesson_completeness(self, state: LessonState) -> str:
         if state['successful_learning']:
-            state = self.get_words_from_vocab(state)
+            state = self.get_word_from_vocab(state)
             self.update_progress(state)
             try:
                 self.db.connection.commit()
@@ -239,12 +256,6 @@ class Agent:
         assert len(message.tool_calls) <= 1
         return {"messages": [message]}
 
-    def request_info(self, state: LessonState):
-        """Request information from user about words amount which user wants to learn"""
-        # response = interrupt('Give me amount of words!!!')
-        state['words_amount'] = int(input('How many words...'))
-        return state
-
 
 class Graph:
     def __init__(self, states=LessonState):
@@ -259,15 +270,11 @@ class Graph:
         self.gph.add_node("training", agent.start_training)
         self.gph.add_node("learning", agent.start_learning_new_words)
         self.gph.add_node("testing", agent.start_test)
-        self.gph.add_node("ask_info", agent.request_info)
         self.gph.add_node("check_progress", agent.decide_to_finish_lesson)
         self.gph.add_conditional_edges("welcome_page", agent.return_working_mode,
                                        {'new': "learning",
                                         'training': "training",
                                         'test': "testing"})
-        self.gph.add_conditional_edges("testing", agent.check_info_fullfillment,
-                                       {'get_info': 'ask_info',
-                                        'next': 'testing'})
         self.gph.add_edge("training", "check_progress")
         self.gph.add_edge("learning", "check_progress")
         self.gph.add_edge("testing", "check_progress")
@@ -278,8 +285,6 @@ class Graph:
                                         'test': "testing",
                                         'finish': END})
         self.gph.set_entry_point("welcome_page")
-
-
 
 # while True:
 #     model_response = get_dialog_agent().invoke(

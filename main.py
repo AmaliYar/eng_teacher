@@ -11,7 +11,7 @@ llm = LangModel()
 base = Postgres
 state = LessonState(is_word_exist=False)
 agent = Agent(llm, base())
-llm.model = llm.model.bind_tools([agent.request_info])
+# llm.model = llm.model.bind_tools([agent.request_info])
 
 
 # state["user_message"] = 'Hi!, I want to learn a new word! My word: satisfaction'
@@ -25,11 +25,12 @@ pipeline = graph.gph.compile(checkpointer=InMemorySaver())
 
 
 config = {"configurable": {"thread_id": "1"}}
-
+pipeline.invoke(state, config)
 events = pipeline.stream(
     state,
     config,
-    stream_mode="debug",
+    stream_mode="values",
+    # debug=True
 )
 
 for event in events:
