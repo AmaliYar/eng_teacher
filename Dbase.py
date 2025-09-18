@@ -48,3 +48,12 @@ class Postgres(Database):
         self.cursor.close()
         self.connection.close()
 
+    def commit_transaction(self):
+        try:
+            self.connection.commit()
+        except Exception as e:
+            self.connection.close()
+            print("Transaction rolled back due to error:", e)
+        finally:
+            self.connection.close()
+

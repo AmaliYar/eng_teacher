@@ -99,9 +99,14 @@ class Agent:
         return words
 
 
-    #todo: add handling usuccessful training
-    def update_progress(self, state: LessonState) -> LessonState:
-        state['learning_progress'] += LEARNING_RATE
+
+    #todo: add handling usuccessful trainings
+    def update_progress(self, state: LessonState, increasing:bool = True) -> LessonState:
+        if increasing:
+            state['learning_progress'] += LEARNING_RATE
+        else:
+            if state['learning_progress'] > 0:
+                state['learning_progress'] -= LEARNING_RATE
         QUERY_UPDATE_PROGRESS = "UPDATE words SET learning_progress =%s WHERE word =%s"
         self.db.send_query(QUERY_UPDATE_PROGRESS, (state['learning_progress'], state['current_word']))
         return state
@@ -233,26 +238,30 @@ class Agent:
         for word in state['words']:
             word.check_user_answer(input(f'get your translation for the word {word.instance}:'))
         state['successful_learning'] = False not in [word.answer_is_correct for word in state['words']]
-        return Command(goto="check_progress")
+        return Command(goto="check_progress", update=state)
     def decide_to_finish_lesson(self, state: LessonState) -> LessonState:
         pass
 
     def return_working_mode(self, state: LessonState) -> str:
         return state['working_mode']
 
-    def check_lesson_completeness(self, state: LessonState) -> str:
+    # пробелма - есть вариант когда исследуется одно слово - это один набор атрибутов, а есть пакетный режим обработки
+    # нескольких слов - здесь другой набор .... Надо какое-то решение плюс-минус адекватное продумать ска
+    def check_lesson_completeness(self, state: LessonState) -> LessonState:
+        increasing_flag = False
         if state['successful_learning']:
-            state = self.get_word_from_vocab(state)
-            self.update_progress(state)
-            try:
-                self.db.connection.commit()
-            except Exception as e:
-                self.db.connection.close()
-                print("Transaction rolled back due to error:", e)
-            finally:
-                self.db.connection.close()
-            return 'finish'
-        return state['working_mode']
+            if not state['words']:
+                state = self.get_word_from_vocab(state)
+                self.update_progress(state)
+                self.db.commit_transaction()
+                return state
+            increasing_flag = True
+        for word in state['words']:
+            state['current_word'] = word.instance
+            state['learning_progress'] = word.learning_progress
+            self.update_progress(state, increasing=increasing_flag)
+        self.db.commit_transaction()
+        return state
 
     def check_info_fullfillment(self, state: LessonState):
         if state['words_amount']:
@@ -272,6 +281,18 @@ class Agent:
         return {"messages": [message]}
 
 
+def check_user_intention(state: LessonState):
+    working_mode_key = 'working_mode'
+    user_answer = input(f'Today we had a {state.get(working_mode_key)}. Would you like to study something else ?')
+    if 'no' in user_answer.lower():
+        return 'yes'
+    state['user_message'] = input('Inform me, what do you want to do next ?')
+    # это какой-то конченный костыль
+    state['words'] = []
+    return 'no'
+
+
+
 class Graph:
     def __init__(self, states=LessonState):
         self.gph = StateGraph(states)
@@ -285,7 +306,7 @@ class Graph:
         self.gph.add_node("training", agent.start_training)
         self.gph.add_node("learning", agent.start_learning_new_words)
         self.gph.add_node("testing", agent.start_test)
-        self.gph.add_node("check_progress", agent.decide_to_finish_lesson)
+        self.gph.add_node("check_progress", agent.check_lesson_completeness)
         self.gph.add_conditional_edges("welcome_page", agent.return_working_mode,
                                        {'new': "learning",
                                         'training': "training",
@@ -294,11 +315,14 @@ class Graph:
         self.gph.add_edge("learning", "check_progress")
         self.gph.add_edge("testing", "check_progress")
         # self.gph.add_edge("tools", "testing")
-        self.gph.add_conditional_edges("check_progress", agent.check_lesson_completeness,
-                                       {'new': "learning",
-                                        'training': "training",
-                                        'test': "testing",
-                                        'finish': END})
+        #todo: тут возможность есть смысл сразу переходить на welcome page
+        self.gph.add_conditional_edges(
+            "check_progress", check_user_intention,
+            {
+                'no': END,
+                'yes': 'welcome_page'
+            }
+        )
         self.gph.set_entry_point("welcome_page")
 
 # while True:

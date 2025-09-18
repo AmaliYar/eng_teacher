@@ -25,7 +25,7 @@ pipeline = graph.gph.compile(checkpointer=InMemorySaver())
 
 
 config = {"configurable": {"thread_id": "1"}}
-pipeline.invoke(state, config)
+# pipeline.invoke(state, config)
 events = pipeline.stream(
     state,
     config,
