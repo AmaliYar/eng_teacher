@@ -18,6 +18,20 @@ LEARNING_STOP_WORD = '*Conclusion*'
 LEARNING_RATE = 0.25
 
 
+class Word:
+    def __init__(self, args: list):
+        self.instance = args[0]
+        self.as_noun = args[1]
+        self.learning_progress = args[2]
+        self.as_verb = args[3]
+        self.as_adjective = args[4]
+        self.answer_is_correct: bool = False
+
+    def check_user_answer(self, user_answer: str):
+        if user_answer.lower() in vars(self).values():
+            self.answer_is_correct = True
+
+
 class LessonState(TypedDict):
     user_message: str
     current_word: str
@@ -79,13 +93,13 @@ class Agent:
         return state
 
     def get_words_from_vocab(self, state: LessonState) -> list:
-        QUERY_FIND_WORDS = "SELECT word FROM words ORDER BY learning_progress LIMIT %s"
+        QUERY_FIND_WORDS = "SELECT * FROM words ORDER BY learning_progress LIMIT %s"
         query_result = self.db.send_query(QUERY_FIND_WORDS, (state['words_amount'],))
-        formatted_result = sum(query_result, [])
-        return formatted_result
+        words = [Word(word) for word in query_result]
+        return words
 
 
-
+    #todo: add handling usuccessful training
     def update_progress(self, state: LessonState) -> LessonState:
         state['learning_progress'] += LEARNING_RATE
         QUERY_UPDATE_PROGRESS = "UPDATE words SET learning_progress =%s WHERE word =%s"
@@ -216,9 +230,10 @@ class Agent:
         state['words_amount'] = response.words
         state['words'] = self.get_words_from_vocab(state)
         print(f'detected {response.words} words')
-        #todo: add testing pipeline: ask trasnlation for every word (without llm)
+        for word in state['words']:
+            word.check_user_answer(input(f'get your translation for the word {word.instance}:'))
+        state['successful_learning'] = False not in [word.answer_is_correct for word in state['words']]
         return Command(goto="check_progress")
-
     def decide_to_finish_lesson(self, state: LessonState) -> LessonState:
         pass
 
