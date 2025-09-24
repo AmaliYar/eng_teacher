@@ -10,26 +10,13 @@ from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import Field, BaseModel
 from langgraph.types import interrupt, Command
+import time
 
 LessonsTypes = Literal['learn', 'train', 'test']
 DIALOG_STEPS = 3
 STEPS_TO_CHECK_RESULT = 1
 LEARNING_STOP_WORD = '*Conclusion*'
 LEARNING_RATE = 0.25
-
-
-class Word:
-    def __init__(self, args: list):
-        self.instance = args[0]
-        self.as_noun = args[1]
-        self.learning_progress = args[2]
-        self.as_verb = args[3]
-        self.as_adjective = args[4]
-        self.answer_is_correct: bool = False
-
-    def check_user_answer(self, user_answer: str):
-        if user_answer.lower() in vars(self).values():
-            self.answer_is_correct = True
 
 
 class LessonState(TypedDict):
@@ -56,7 +43,11 @@ class Agent:
         class WorkingModes(BaseModel):
             """Probable working modes, based on user question. Choose one."""
             mode: Literal['new', 'training', 'test'] = Field(
-                description="Choose, which working mode had supposed by user request.")
+                description="""Choose, which working mode had supposed by user request.
+                new - describes user intention to learn a new word;
+                training - describes user intention to train words, which he learned earlier;
+                test - describes user intention to check his knowledge - aka examination
+                """)
             word: Optional[str] = Field(
                 default='',
                 description="Word, which user wants to study")
@@ -66,8 +57,10 @@ class Agent:
                         2) if user pointed a word, which he want to study, find it and remember
                         {msg}
                         """)
-        structured_instance = self.model.model.with_structured_output(WorkingModes)
-        response = structured_instance.invoke(prompt.invoke({'msg': state['user_message']}))
+        # structured_instance = self.model.model.with_structured_output(WorkingModes)
+        # response = structured_instance.invoke(prompt.invoke({'msg': state['user_message']}))
+        response = send_request_to_model(self.model.model.with_structured_output(WorkingModes),
+                                         prompt.invoke({'msg': state['user_message']}))
         state['working_mode'] = response.mode
         state['current_word'] = response.word
         return state
@@ -95,7 +88,7 @@ class Agent:
     def get_words_from_vocab(self, state: LessonState) -> list:
         QUERY_FIND_WORDS = "SELECT * FROM words ORDER BY learning_progress LIMIT %s"
         query_result = self.db.send_query(QUERY_FIND_WORDS, (state['words_amount'],))
-        words = [Word(word) for word in query_result]
+        words = [parse_query(word) for word in query_result]
         return words
 
 
@@ -120,8 +113,10 @@ class Agent:
                                                            agent,
                                                            {"configurable": {"thread_id": "1"}},
                                                            state):
-            print(agent.invoke({'messages': {'role': 'user', 'content': input('Your answer:')}},
-                               {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
+            # print(agent.invoke({'messages': {'role': 'user', 'content': input('Your answer:')}},
+            #                    {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
+            print(send_request_to_model(agent, {'messages': {'role': 'user', 'content': input('Your answer:')}},
+                                        {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
 
         return state
 
@@ -176,38 +171,73 @@ class Agent:
         if not state['is_word_exist']:
             print(f'It is a new word, forming metadata in database')
             structured_input = self.model.model.with_structured_output(method="json_mode")
-            model_response = structured_input.invoke([
-                SystemMessage(
-                    content="""
-                            <instruction>
-                            You are system for preparing data to loading into database. Your working algorithm:
-                            1) detect in user message word, which he wants to learn. Remember this word like <current_word>
-                            2) detect noun form of <current_word> in English, save it like <noun>. 
-                            Do not save same by sense words ! If from does not exist, remember NULL for <noun>. 
-                            3) detect verb form of <current_word> in English, save it like <verb>. 
-                            Do not save same by sense words ! If from does not exist, remember NULL for <verb>
-                            4) detect adjective form of <current_word> in English, save it like <adjective>. 
-                            Do not save same by sense words ! If from does not exist, remember NULL for <adjective>
-                            </instruction>
-                            next you can find specific for output format:
-                            <output format>
-                            Return user next JSON format:
-                            {
-                            "current_word": <current_word>,
-                            "current_word_translations": {
-                                                                "noun": <noun>,
-                                                                "verb": <verb>,
-                                                                "adjective": <adjective>
-                            
-                                                        }
-                            }
-                            Your answer mustn't contain another information rather JSON. It is very important !
-                            </output format>
-                            """
+            #todo: handle more determined exit from dialog
+            model_response = send_request_to_model(
+                structured_input,
+                [
+                    SystemMessage(
+                        content="""
+                               <instruction>
+                               You are system for preparing data to loading into database. Your working algorithm:
+                               1) detect in user message word, which he wants to learn. Remember this word like <current_word>
+                               2) detect noun form of <current_word> in English, save it like <noun>. 
+                               Do not save same by sense words ! If from does not exist, remember NULL for <noun>. 
+                               3) detect verb form of <current_word> in English, save it like <verb>. 
+                               Do not save same by sense words ! If from does not exist, remember NULL for <verb>
+                               4) detect adjective form of <current_word> in English, save it like <adjective>. 
+                               Do not save same by sense words ! If from does not exist, remember NULL for <adjective>
+                               </instruction>
+                               next you can find specific for output format:
+                               <output format>
+                               Return user next JSON format:
+                               {
+                               "current_word": <current_word>,
+                               "current_word_translations": {
+                                                                   "noun": <noun>,
+                                                                   "verb": <verb>,
+                                                                   "adjective": <adjective>
 
-                ),
-                HumanMessage(content=state["current_word"])
-            ])
+                                                           }
+                               }
+                               Your answer mustn't contain another information rather JSON. It is very important !
+                               </output format>
+                               """
+                    ),
+                    HumanMessage(content=state["current_word"])
+                ]
+            )
+            # model_response = structured_input.invoke([
+            #     SystemMessage(
+            #         content="""
+            #                 <instruction>
+            #                 You are system for preparing data to loading into database. Your working algorithm:
+            #                 1) detect in user message word, which he wants to learn. Remember this word like <current_word>
+            #                 2) detect noun form of <current_word> in English, save it like <noun>.
+            #                 Do not save same by sense words ! If from does not exist, remember NULL for <noun>.
+            #                 3) detect verb form of <current_word> in English, save it like <verb>.
+            #                 Do not save same by sense words ! If from does not exist, remember NULL for <verb>
+            #                 4) detect adjective form of <current_word> in English, save it like <adjective>.
+            #                 Do not save same by sense words ! If from does not exist, remember NULL for <adjective>
+            #                 </instruction>
+            #                 next you can find specific for output format:
+            #                 <output format>
+            #                 Return user next JSON format:
+            #                 {
+            #                 "current_word": <current_word>,
+            #                 "current_word_translations": {
+            #                                                     "noun": <noun>,
+            #                                                     "verb": <verb>,
+            #                                                     "adjective": <adjective>
+            #
+            #                                             }
+            #                 }
+            #                 Your answer mustn't contain another information rather JSON. It is very important !
+            #                 </output format>
+            #                 """
+            #
+            #     ),
+            #     HumanMessage(content=state["current_word"])
+            # ])
             state.update(model_response)
             self.add_words_to_vocab(state)
         self.start_training(state)
@@ -218,15 +248,22 @@ class Agent:
             """words amount, which user wants to learn"""
             words: Optional[int] = Field(default=None, description="words amount, which user wants to learn")
 
-        response = self.model.model.with_structured_output(UserWords).invoke(
-            [SystemMessage(
-                content="""
-                You are language learning assistant.
+        response = send_request_to_model(self.model.model.with_structured_output(UserWords),
+                                         [SystemMessage(content="""You are language learning assistant.
                 Your main task - calculate, how many words user wants today to train.
                 Sometimes, user can forget to specify words amount. Then, you must request this information.
                 Request words until user provides you this information, because it is very important!
-                """),
-                HumanMessage(content=state['user_message'])])
+                """), HumanMessage(content=state['user_message'])])
+
+        # response = self.model.model.with_structured_output(UserWords).invoke(
+        #     [SystemMessage(
+        #         content="""
+        #         You are language learning assistant.
+        #         Your main task - calculate, how many words user wants today to train.
+        #         Sometimes, user can forget to specify words amount. Then, you must request this information.
+        #         Request words until user provides you this information, because it is very important!
+        #         """),
+        #         HumanMessage(content=state['user_message'])])
         if not response.words:
             response.words = int(input('Give me amount of words!!!'))
             print(f'requesting words amount from user')
@@ -236,8 +273,8 @@ class Agent:
         state['words'] = self.get_words_from_vocab(state)
         print(f'detected {response.words} words')
         for word in state['words']:
-            word.check_user_answer(input(f'get your translation for the word {word.instance}:'))
-        state['successful_learning'] = False not in [word.answer_is_correct for word in state['words']]
+            word['learned'] = check_user_answer(word, input(f'get your translation for the word {word.get("word")}:'))
+        state['successful_learning'] = False not in [word['learned'] for word in state['words']]
         return Command(goto="check_progress", update=state)
     def decide_to_finish_lesson(self, state: LessonState) -> LessonState:
         pass
@@ -257,8 +294,8 @@ class Agent:
                 return state
             increasing_flag = True
         for word in state['words']:
-            state['current_word'] = word.instance
-            state['learning_progress'] = word.learning_progress
+            state['current_word'] = word['word']
+            state['learning_progress'] = word['learning_progress']
             self.update_progress(state, increasing=increasing_flag)
         self.db.commit_transaction()
         return state
@@ -285,13 +322,39 @@ def check_user_intention(state: LessonState):
     working_mode_key = 'working_mode'
     user_answer = input(f'Today we had a {state.get(working_mode_key)}. Would you like to study something else ?')
     if 'no' in user_answer.lower():
-        return 'yes'
+        return Command(goto=END)
     state['user_message'] = input('Inform me, what do you want to do next ?')
     # это какой-то конченный костыль
     state['words'] = []
-    return 'no'
+    return Command(goto='welcome_page', update=state)
 
 
+def check_user_answer(word_metadata: dict, user_answer: str):
+    return user_answer.lower() in word_metadata.values()
+
+
+def parse_query(resulted_row: list) -> dict:
+    return {
+        'word': resulted_row[0],
+        'as_noun': resulted_row[1],
+        'learning_progress': resulted_row[2],
+        'as_verb': resulted_row[3],
+        'as_adjective': resulted_row[4],
+        'learned': False
+    }
+
+
+def send_request_to_model(receiver, request, config=None):
+    response = None
+    while not response:
+        try:
+            print('trying to send request for model')
+            response = receiver.invoke(request, config)
+            print(f'200')
+            return response
+        except Exception as e:
+            print(f'unstable connection... trying again. Cause: {e}')
+            time.sleep(2)
 
 class Graph:
     def __init__(self, states=LessonState):
@@ -307,6 +370,7 @@ class Graph:
         self.gph.add_node("learning", agent.start_learning_new_words)
         self.gph.add_node("testing", agent.start_test)
         self.gph.add_node("check_progress", agent.check_lesson_completeness)
+        self.gph.add_node("check_intention", check_user_intention)
         self.gph.add_conditional_edges("welcome_page", agent.return_working_mode,
                                        {'new': "learning",
                                         'training': "training",
@@ -314,15 +378,7 @@ class Graph:
         self.gph.add_edge("training", "check_progress")
         self.gph.add_edge("learning", "check_progress")
         self.gph.add_edge("testing", "check_progress")
-        # self.gph.add_edge("tools", "testing")
-        #todo: тут возможность есть смысл сразу переходить на welcome page
-        self.gph.add_conditional_edges(
-            "check_progress", check_user_intention,
-            {
-                'no': END,
-                'yes': 'welcome_page'
-            }
-        )
+        self.gph.add_edge("check_progress", "check_intention")
         self.gph.set_entry_point("welcome_page")
 
 # while True:
