@@ -16,7 +16,8 @@ class LangModel:
 
     def __init__(self):
         self.api_key = getpass.getpass("Api key:")
-        self.model = ChatMistralAI(model="mistral-large-2407", api_key=self.api_key)
+        self.model = ChatMistralAI(model="ministral-3b-2410", api_key=self.api_key, temperature=0.5, timeout=250,
+                                   max_concurrent_requests=2)
         self.model_instance = 'mistral-embed'
         # self.embedder = Mistral(api_key=self.api_key)
         self.embedder = MistralAIEmbeddings(api_key=self.api_key)
@@ -35,7 +36,7 @@ class LangModel:
                 print(f'connection with mistral has established. Model\'s answer: {model_answer}')
             except Exception as e:
                 print(f'unstable connection... trying again. Cause: {e}')
-                time.sleep(2)
+                time.sleep(10)
 
 
 

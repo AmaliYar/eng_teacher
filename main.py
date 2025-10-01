@@ -14,8 +14,8 @@ agent = Agent(llm, base())
 # llm.model = llm.model.bind_tools([agent.request_info])
 
 
-# state["user_message"] = 'Hi!, I want to learn a new word! My word: satisfaction'
-state["user_message"] = 'Hi!, I want to check my words!'
+state["user_message"] = 'Hi!, I want to learn a new word! My word: poverty'
+# state["user_message"] = 'Hi!, I want to check my words!'
 # msg = "I need some expert guidance for building an AI agent. Could you request assistance for me?"
 
 graph = Graph()

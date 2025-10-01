@@ -15,7 +15,7 @@ import time
 LessonsTypes = Literal['learn', 'train', 'test']
 DIALOG_STEPS = 3
 STEPS_TO_CHECK_RESULT = 1
-LEARNING_STOP_WORD = '*Conclusion*'
+LEARNING_STOP_WORD = 'Conclusion'
 LEARNING_RATE = 0.25
 
 
@@ -104,8 +104,9 @@ class Agent:
         self.db.send_query(QUERY_UPDATE_PROGRESS, (state['learning_progress'], state['current_word']))
         return state
 
-    def start_training(self, state: LessonState) -> LessonState:
-        # todo: add conditional handling of input data: can be one word, or more than one
+    def start_training(self, state: LessonState):
+        if not state['current_word']:
+            return Command(goto='learning', update=state)
 
         agent = self.get_dialog_agent(state['current_word'])
         print('welcome the agent. He knows your word yet')
@@ -113,8 +114,6 @@ class Agent:
                                                            agent,
                                                            {"configurable": {"thread_id": "1"}},
                                                            state):
-            # print(agent.invoke({'messages': {'role': 'user', 'content': input('Your answer:')}},
-            #                    {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
             print(send_request_to_model(agent, {'messages': {'role': 'user', 'content': input('Your answer:')}},
                                         {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
 
@@ -128,10 +127,11 @@ class Agent:
             checkpointer=MemorySaver(), prompt=
             f"""
                 <instruction>
-                You are system, which helps peoples to learn new words. 
-                Before sending messages for user, think about your interaction plan with user, 
-                plan your action careful - it is very important ! 
-                Next you can find scenario of interaction with user:
+                You are english language teacher, which helps peoples to learn new words. 
+                Before sending messages for user, plan your interaction with user, 
+                your plan must to follow a next [scenario] - it is very important ! 
+                
+                Next you can find [scenario] of interaction with user:
                 step 0 - a student sends you a word, which he wants to learn
                 step 1 - you show 3 phrases-examples with user's word and 3 sentences with user's word
                 step 2 - You generate question for user. Question must to be related with user's word
@@ -140,8 +140,9 @@ class Agent:
                 step 5 - You answer on user question
                 step 6 - Based on above steps results, you do a decision: has student learned the word or not.
                 Follow it step by step. 
-                </instruction/>
+                </instruction>
                 Next you can find restrictions, which provide you, how to avoid mistakes in your work:
+                
                 <restrictions>
                 Be careful in steps 2 and 4, which has pointed in instruction: wait user answer before crossing to 
                 the next step! Do not show him task from more than one step! It is very important! 
@@ -155,13 +156,16 @@ class Agent:
                 which contains only one of two words:
                 "success" - if student gave you a right translation
                 "fail" - if student did a mistake
-                You must also use specific keyword Conclusion
+                You must also use specific keyword [Conclusion]
                 </output format>
-                Here you can find your final message examples:
+                
+                Here you can find several final message examples:
+                
                 <output format examples>
-                *Conclusion*: success
-                *Conclusion*: fail
+                1) Conclusion: success
+                2) Conclusion: fail
                 </output format examples>
+                
                 User's word today: {current_word}
                 """)
 
@@ -206,38 +210,6 @@ class Agent:
                     HumanMessage(content=state["current_word"])
                 ]
             )
-            # model_response = structured_input.invoke([
-            #     SystemMessage(
-            #         content="""
-            #                 <instruction>
-            #                 You are system for preparing data to loading into database. Your working algorithm:
-            #                 1) detect in user message word, which he wants to learn. Remember this word like <current_word>
-            #                 2) detect noun form of <current_word> in English, save it like <noun>.
-            #                 Do not save same by sense words ! If from does not exist, remember NULL for <noun>.
-            #                 3) detect verb form of <current_word> in English, save it like <verb>.
-            #                 Do not save same by sense words ! If from does not exist, remember NULL for <verb>
-            #                 4) detect adjective form of <current_word> in English, save it like <adjective>.
-            #                 Do not save same by sense words ! If from does not exist, remember NULL for <adjective>
-            #                 </instruction>
-            #                 next you can find specific for output format:
-            #                 <output format>
-            #                 Return user next JSON format:
-            #                 {
-            #                 "current_word": <current_word>,
-            #                 "current_word_translations": {
-            #                                                     "noun": <noun>,
-            #                                                     "verb": <verb>,
-            #                                                     "adjective": <adjective>
-            #
-            #                                             }
-            #                 }
-            #                 Your answer mustn't contain another information rather JSON. It is very important !
-            #                 </output format>
-            #                 """
-            #
-            #     ),
-            #     HumanMessage(content=state["current_word"])
-            # ])
             state.update(model_response)
             self.add_words_to_vocab(state)
         self.start_training(state)
@@ -254,16 +226,6 @@ class Agent:
                 Sometimes, user can forget to specify words amount. Then, you must request this information.
                 Request words until user provides you this information, because it is very important!
                 """), HumanMessage(content=state['user_message'])])
-
-        # response = self.model.model.with_structured_output(UserWords).invoke(
-        #     [SystemMessage(
-        #         content="""
-        #         You are language learning assistant.
-        #         Your main task - calculate, how many words user wants today to train.
-        #         Sometimes, user can forget to specify words amount. Then, you must request this information.
-        #         Request words until user provides you this information, because it is very important!
-        #         """),
-        #         HumanMessage(content=state['user_message'])])
         if not response.words:
             response.words = int(input('Give me amount of words!!!'))
             print(f'requesting words amount from user')
@@ -287,7 +249,7 @@ class Agent:
     def check_lesson_completeness(self, state: LessonState) -> LessonState:
         increasing_flag = False
         if state['successful_learning']:
-            if not state['words']:
+            if 'words' not in state.keys() or not state['words']:
                 state = self.get_word_from_vocab(state)
                 self.update_progress(state)
                 self.db.commit_transaction()
@@ -354,7 +316,7 @@ def send_request_to_model(receiver, request, config=None):
             return response
         except Exception as e:
             print(f'unstable connection... trying again. Cause: {e}')
-            time.sleep(2)
+            time.sleep(10)
 
 class Graph:
     def __init__(self, states=LessonState):
