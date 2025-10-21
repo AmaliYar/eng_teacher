@@ -66,14 +66,17 @@ class Agent:
         return state
 
     def add_words_to_vocab(self, state: LessonState) -> LessonState:
-        QUERY_ADD_NEW_WORD = 'INSERT INTO words (word, as_noun, learning_progress, as_verb, as_adjective) ' \
-                             'VALUES (%s, %s, %s, %s, %s)'
+        QUERY_ADD_NEW_WORD = 'INSERT INTO words (word, as_noun, learning_progress, as_verb, as_adjective, noun_rus,' \
+                             ' adj_rus, verb_rus) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)'
         self.db.send_query(QUERY_ADD_NEW_WORD,
                            (state['current_word'],
                             state['current_word_translations']['noun'],
                             0.0,
                             state['current_word_translations']['verb'],
                             state['current_word_translations']['adjective'],
+                            state['current_word_translations']['noun_rus'],
+                            state['current_word_translations']['adj_rus'],
+                            state['current_word_translations']['verb_rus'],
                             ))
         return state
 
@@ -190,6 +193,12 @@ class Agent:
                                Do not save same by sense words ! If from does not exist, remember NULL for <verb>
                                4) detect adjective form of <current_word> in English, save it like <adjective>. 
                                Do not save same by sense words ! If from does not exist, remember NULL for <adjective>
+                               5) translate adjective form of <noun> to Russian, save it like <noun_rus>. 
+                               Do not save same by sense words ! If from does not exist, remember NULL for <noun_rus>
+                               6) translate verb form of <noun> to Russian, save it like <verb_rus>. 
+                               Do not save same by sense words ! If from does not exist, remember NULL for <verb_rus>
+                               7) translate adjective form of <noun> to Russian, save it like <adj_rus>. 
+                               Do not save same by sense words ! If from does not exist, remember NULL for <adj_rus>
                                </instruction>
                                next you can find specific for output format:
                                <output format>
@@ -199,7 +208,11 @@ class Agent:
                                "current_word_translations": {
                                                                    "noun": <noun>,
                                                                    "verb": <verb>,
-                                                                   "adjective": <adjective>
+                                                                   "adjective": <adjective>,
+                                                                   "noun_rus": <noun_rus>,
+                                                                   "verb_rus": <verb_rus>,
+                                                                   "adj_rus": <adj_rus>
+                                                                   
 
                                                            }
                                }
