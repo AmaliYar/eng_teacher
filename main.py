@@ -15,7 +15,7 @@ agent = Agent(llm, Postgres())
 
 
 # state["user_message"] = 'Hi!, I want to learn a new word! My word: poverty'
-state["user_message"] = 'Hi!, I want to train my words!'
+state["user_message"] = 'Hi!, I want to test my words!'
 # msg = "I need some expert guidance for building an AI agent. Could you request assistance for me?"
 
 graph = Graph()
@@ -26,13 +26,9 @@ pipeline = graph.gph.compile(checkpointer=InMemorySaver())
 
 config = {"configurable": {"thread_id": "1"}}
 # pipeline.invoke(state, config)
-events = pipeline.stream(
-    state,
-    config,
-    stream_mode="values",
-    # debug=True
-)
 
-for event in events:
-    if "messages" in event:
-        event["messages"][-1].pretty_print()
+
+async def main(state, config):
+    return await pipeline.ainvoke(state, config)
+
+run(main(state, config))

@@ -4,9 +4,6 @@ from langchain_mistralai.chat_models import ChatMistralAI
 import getpass
 import time
 
-class Agent(ABC):
-    pass
-
 
 class LangModel:
     model: ChatMistralAI
@@ -27,13 +24,13 @@ class LangModel:
     def embedding_data(self, data: list):
         return self.embedder.embeddings.create(model=self.model_instance, inputs=data)
 
-    def get_connection_with_model(self):
+    async def get_connection_with_model(self):
         while not self.connection:
             try:
                 print('trying to set connection with mistral')
-                model_answer = self.model.invoke('Hi mistral').content
+                model_answer = await self.model.ainvoke('Hi mistral')
                 self.connection = True
-                print(f'connection with mistral has established. Model\'s answer: {model_answer}')
+                print(f'connection with mistral has established. Model\'s answer: {model_answer.content}')
             except Exception as e:
                 print(f'unstable connection... trying again. Cause: {e}')
                 time.sleep(10)

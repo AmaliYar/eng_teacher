@@ -39,7 +39,7 @@ class Agent:
         self.model = model
         self.db = db
 
-    def get_working_mode(self, state: LessonState) -> LessonState:
+    async def get_working_mode(self, state: LessonState) -> LessonState:
         class WorkingModes(BaseModel):
             """Probable working modes, based on user question. Choose one."""
             mode: Literal['new', 'training', 'test'] = Field(
@@ -59,8 +59,8 @@ class Agent:
                         """)
         # structured_instance = self.model.model.with_structured_output(WorkingModes)
         # response = structured_instance.invoke(prompt.invoke({'msg': state['user_message']}))
-        response = send_request_to_model(self.model.model.with_structured_output(WorkingModes),
-                                         prompt.invoke({'msg': state['user_message']}))
+        response = await send_request_to_model(self.model.model.with_structured_output(WorkingModes),
+                                               prompt.invoke({'msg': state['user_message']}))
         state['working_mode'] = response.mode
         state['current_word'] = response.word
         return state
@@ -104,7 +104,7 @@ class Agent:
         self.db.send_query(QUERY_UPDATE_PROGRESS, (state['learning_progress'], state['current_word']))
         return state
 
-    def start_training(self, state: LessonState):
+    async def start_training(self, state: LessonState):
         if not state['current_word']:
             state['current_word'] = input('You have forgot to point a word. Which word do you want to train?')
             state['working_mode'] = 'learn'
@@ -116,8 +116,9 @@ class Agent:
                                                            agent,
                                                            {"configurable": {"thread_id": "1"}},
                                                            state):
-            print(send_request_to_model(agent, {'messages': {'role': 'user', 'content': input('Your answer:')}},
-                                        {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
+            model_answer = await send_request_to_model(agent, {'messages': {'role': 'user', 'content': input('Your answer:')}},
+                                        {"configurable": {"thread_id": "1"}})
+            print(model_answer.get('messages')[-1].content)
 
         return Command(goto='check_progress', update=state)
 
@@ -172,14 +173,14 @@ class Agent:
                 User's word today: {current_word}
                 """)
 
-    def start_learning_new_words(self, state: LessonState) -> LessonState:
+    async def start_learning_new_words(self, state: LessonState) -> LessonState:
         # todo: add validation word in database
         state = self.get_word_from_vocab(state)
         if not state['is_word_exist']:
             print(f'It is a new word, forming metadata in database')
             structured_input = self.model.model.with_structured_output(method="json_mode")
             #todo: handle more determined exit from dialog
-            model_response = send_request_to_model(
+            model_response = await send_request_to_model(
                 structured_input,
                 [
                     SystemMessage(
@@ -225,15 +226,15 @@ class Agent:
             )
             state.update(model_response)
             self.add_words_to_vocab(state)
-        self.start_training(state)
+        await self.start_training(state)
         return state
 
-    def start_test(self, state: LessonState):
+    async def start_test(self, state: LessonState):
         class UserWords(BaseModel):
             """words amount, which user wants to learn"""
             words: Optional[int] = Field(default=None, description="words amount, which user wants to learn")
 
-        response = send_request_to_model(self.model.model.with_structured_output(UserWords),
+        response = await send_request_to_model(self.model.model.with_structured_output(UserWords),
                                          [SystemMessage(content="""You are language learning assistant.
                 Your main task - detect, how many words user wants today to train.
                 Sometimes, user can forget to specify words amount. Then, you must to point it, like "0 words"
@@ -287,11 +288,6 @@ class Agent:
                 return True
         return False
 
-    def chatbot(self, state):
-        message = self.model.model.invoke(state["messages"][-1].content)
-        assert len(message.tool_calls) <= 1
-        return {"messages": [message]}
-
     def check_user_intention(self, state: LessonState):
         working_mode_key = 'working_mode'
         user_answer = input(f'Today we had a {state.get(working_mode_key)}. Would you like to study something else ?')
@@ -301,6 +297,7 @@ class Agent:
         state['user_message'] = input('Inform me, what do you want to do next ?')
         # это какой-то конченный костыль
         state['words'] = []
+        state['is_word_exist'] = False
         return Command(goto='welcome_page', update=state)
 
 
@@ -346,12 +343,12 @@ def parse_query(resulted_row: list) -> dict:
     }
 
 
-def send_request_to_model(receiver, request, config=None):
+async def send_request_to_model(receiver, request, config=None):
     response = None
     while not response:
         try:
             print('trying to send request for model')
-            response = receiver.invoke(request, config)
+            response = await receiver.ainvoke(request, config)
             print(f'200')
             return response
         except Exception as e:
