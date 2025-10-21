@@ -37,12 +37,14 @@ class Postgres(Database):
         except pg8000.Error as err:
             print(f"An error occurred: {err}")
 
-    def send_query(self, query: str, params) -> tuple:
+    def send_query(self, query: str, params):
         try:
-            return self.cursor.execute(query, params).fetchall()
+            if 'SELECT' in query:
+                return self.cursor.execute(query, params).fetchall()
+            return self.cursor.execute(query, params)
         except pg8000.Error as err:
             print(f"An error occurred: {err}")
-            return tuple()
+            return None
 
     def end_session(self):
         self.cursor.close()
@@ -54,6 +56,4 @@ class Postgres(Database):
         except Exception as e:
             self.connection.close()
             print("Transaction rolled back due to error:", e)
-        finally:
-            self.connection.close()
 

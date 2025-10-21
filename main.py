@@ -8,14 +8,14 @@ from langchain_core.messages import HumanMessage
 
 
 llm = LangModel()
-base = Postgres
+
 state = LessonState(is_word_exist=False)
-agent = Agent(llm, base())
+agent = Agent(llm, Postgres())
 # llm.model = llm.model.bind_tools([agent.request_info])
 
 
-state["user_message"] = 'Hi!, I want to learn a new word! My word: poverty'
-# state["user_message"] = 'Hi!, I want to check my words!'
+# state["user_message"] = 'Hi!, I want to learn a new word! My word: poverty'
+state["user_message"] = 'Hi!, I want to train my words!'
 # msg = "I need some expert guidance for building an AI agent. Could you request assistance for me?"
 
 graph = Graph()

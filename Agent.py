@@ -91,9 +91,6 @@ class Agent:
         words = [parse_query(word) for word in query_result]
         return words
 
-
-
-    #todo: add handling usuccessful trainings
     def update_progress(self, state: LessonState, increasing:bool = True) -> LessonState:
         if increasing:
             state['learning_progress'] += LEARNING_RATE
@@ -106,6 +103,8 @@ class Agent:
 
     def start_training(self, state: LessonState):
         if not state['current_word']:
+            state['current_word'] = input('You have forgot to point a word. Which word do you want to train?')
+            state['working_mode'] = 'learn'
             return Command(goto='learning', update=state)
 
         agent = self.get_dialog_agent(state['current_word'])
@@ -117,7 +116,7 @@ class Agent:
             print(send_request_to_model(agent, {'messages': {'role': 'user', 'content': input('Your answer:')}},
                                         {"configurable": {"thread_id": "1"}}).get('messages')[-1].content)
 
-        return state
+        return Command(goto='check_progress', update=state)
 
     def get_dialog_agent(self, current_word: str):
         return create_react_agent(model=ChatMistralAI(
@@ -133,7 +132,8 @@ class Agent:
                 
                 Next you can find [scenario] of interaction with user:
                 step 0 - a student sends you a word, which he wants to learn
-                step 1 - you show 3 phrases-examples with user's word and 3 sentences with user's word
+                step 1 - you show 3 phrases-examples with user's word and 3 sentences with user's word. 
+                Also point word's russian translation.
                 step 2 - You generate question for user. Question must to be related with user's word
                 step 3 - user sends you an answer for question
                 step 4 - User generates a question for you. Question must to be related with user's word.
@@ -222,9 +222,8 @@ class Agent:
 
         response = send_request_to_model(self.model.model.with_structured_output(UserWords),
                                          [SystemMessage(content="""You are language learning assistant.
-                Your main task - calculate, how many words user wants today to train.
-                Sometimes, user can forget to specify words amount. Then, you must request this information.
-                Request words until user provides you this information, because it is very important!
+                Your main task - detect, how many words user wants today to train.
+                Sometimes, user can forget to specify words amount. Then, you must to point it, like "0 words"
                 """), HumanMessage(content=state['user_message'])])
         if not response.words:
             response.words = int(input('Give me amount of words!!!'))
@@ -238,6 +237,7 @@ class Agent:
             word['learned'] = check_user_answer(word, input(f'get your translation for the word {word.get("word")}:'))
         state['successful_learning'] = False not in [word['learned'] for word in state['words']]
         return Command(goto="check_progress", update=state)
+
     def decide_to_finish_lesson(self, state: LessonState) -> LessonState:
         pass
 
@@ -279,16 +279,43 @@ class Agent:
         assert len(message.tool_calls) <= 1
         return {"messages": [message]}
 
+    def check_user_intention(self, state: LessonState):
+        working_mode_key = 'working_mode'
+        user_answer = input(f'Today we had a {state.get(working_mode_key)}. Would you like to study something else ?')
+        if 'no' in user_answer.lower():
+            self.db.end_session()
+            return Command(goto=END)
+        state['user_message'] = input('Inform me, what do you want to do next ?')
+        # это какой-то конченный костыль
+        state['words'] = []
+        return Command(goto='welcome_page', update=state)
 
-def check_user_intention(state: LessonState):
-    working_mode_key = 'working_mode'
-    user_answer = input(f'Today we had a {state.get(working_mode_key)}. Would you like to study something else ?')
-    if 'no' in user_answer.lower():
-        return Command(goto=END)
-    state['user_message'] = input('Inform me, what do you want to do next ?')
-    # это какой-то конченный костыль
-    state['words'] = []
-    return Command(goto='welcome_page', update=state)
+
+class Graph:
+    def __init__(self, states=LessonState):
+        self.gph = StateGraph(states)
+
+    def build_default_graph(self, agent: Agent):
+        # tools = []
+        # tools = [request_info]
+        # tool_node = ToolNode(tools=tools)
+        self.gph.add_node("welcome_page", agent.get_working_mode)
+        # self.gph.add_node("tools", tool_node)
+        self.gph.add_node("training", agent.start_training)
+        self.gph.add_node("learning", agent.start_learning_new_words)
+        self.gph.add_node("testing", agent.start_test)
+        self.gph.add_node("check_progress", agent.check_lesson_completeness)
+        self.gph.add_node("check_intention", agent.check_user_intention)
+        self.gph.add_conditional_edges("welcome_page", agent.return_working_mode,
+                                       {'new': "learning",
+                                        'training': "training",
+                                        'test': "testing"})
+        # self.gph.add_edge("training", "check_progress")
+        self.gph.add_edge("learning", "check_progress")
+        # self.gph.add_edge("testing", "check_progress")
+        self.gph.add_edge("check_progress", "check_intention")
+        self.gph.set_entry_point("welcome_page")
+
 
 
 def check_user_answer(word_metadata: dict, user_answer: str):
@@ -317,34 +344,3 @@ def send_request_to_model(receiver, request, config=None):
         except Exception as e:
             print(f'unstable connection... trying again. Cause: {e}')
             time.sleep(10)
-
-class Graph:
-    def __init__(self, states=LessonState):
-        self.gph = StateGraph(states)
-
-    def build_default_graph(self, agent: Agent):
-        # tools = []
-        # tools = [request_info]
-        # tool_node = ToolNode(tools=tools)
-        self.gph.add_node("welcome_page", agent.get_working_mode)
-        # self.gph.add_node("tools", tool_node)
-        self.gph.add_node("training", agent.start_training)
-        self.gph.add_node("learning", agent.start_learning_new_words)
-        self.gph.add_node("testing", agent.start_test)
-        self.gph.add_node("check_progress", agent.check_lesson_completeness)
-        self.gph.add_node("check_intention", check_user_intention)
-        self.gph.add_conditional_edges("welcome_page", agent.return_working_mode,
-                                       {'new': "learning",
-                                        'training': "training",
-                                        'test': "testing"})
-        self.gph.add_edge("training", "check_progress")
-        self.gph.add_edge("learning", "check_progress")
-        self.gph.add_edge("testing", "check_progress")
-        self.gph.add_edge("check_progress", "check_intention")
-        self.gph.set_entry_point("welcome_page")
-
-# while True:
-#     model_response = get_dialog_agent().invoke(
-#         {"messages": [{"role": "user", "content": input("Your message:")}]},
-#         {"configurable": {"thread_id": "1"}})
-#     print(model_response['messages'][-1].content)
